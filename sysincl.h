@@ -53,7 +53,9 @@
 #include <sys/time.h>
 #include <sys/types.h>
 #include <sys/un.h>
+#ifndef QNX
 #include <sys/shm.h>
+#endif
 #include <sys/wait.h>
 #include <time.h>
 #include <unistd.h>

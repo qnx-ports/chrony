@@ -68,7 +68,6 @@ chronyc : $(CLI_OBJS)
 getdate.o: CFLAGS += $(GETDATE_CFLAGS)
 
 distclean : clean
-	$(MAKE) -C doc distclean
 	$(MAKE) -C test/unit distclean
 	-rm -f .DS_Store
 	-rm -f Makefile config.h config.log
@@ -101,13 +100,6 @@ install: chronyd chronyc
 	chmod 755 $(DESTDIR)$(SBINDIR)/chronyd
 	cp chronyc $(DESTDIR)$(BINDIR)/chronyc
 	chmod 755 $(DESTDIR)$(BINDIR)/chronyc
-	$(MAKE) -C doc install
-
-docs :
-	$(MAKE) -C doc docs
-
-install-docs :
-	$(MAKE) -C doc install-docs
 
 %.o : %.c
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $<

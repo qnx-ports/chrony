@@ -70,6 +70,7 @@ send_and_recv(int type, int is_stream, int is_client_bound, int server_fd, int c
   UTI_GetRandomBytes(buf1, sizeof (buf1));
 
   TEST_CHECK(SCK_Send(client_fd, buf1, sizeof (buf1), 0) == sizeof (buf1));
+  usleep(250); // very flaky without wait, and we call this function a lot during this test
   msg1 = SCK_ReceiveMessage(server_fd, 0);
 
   TEST_CHECK(msg1);
