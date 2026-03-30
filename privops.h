@@ -41,9 +41,9 @@ int PRV_AdjustTimex(struct timex *txc);
 #endif
 
 #ifdef PRIVOPS_SETTIME
-int PRV_SetTime(const struct timeval *tp, const struct timezone *tzp);
+int PRV_SetTime(clockid_t clockid, const struct timespec *tp);
 #else
-#define PRV_SetTime settimeofday
+#define PRV_SetTime clock_settime
 #endif
 
 #ifdef PRIVOPS_BINDSOCKET
@@ -64,12 +64,18 @@ void PRV_ReloadDNS(void);
 #define PRV_ReloadDNS DNS_Reload
 #endif
 
+#ifdef PRIVOPS_ADJUSTFREQ
+int PRV_AdjustFreq(const int64_t *freq, int64_t *oldfreq);
+#else
+#define PRV_AdjustFreq adjfreq
+#endif
+
 #ifdef PRIVOPS_HELPER
-void PRV_Initialise(void);
+void PRV_Initialise(int scfilter_level);
 void PRV_StartHelper(void);
 void PRV_Finalise(void);
 #else
-#define PRV_Initialise()
+#define PRV_Initialise(scfilter_level)
 #define PRV_StartHelper()
 #define PRV_Finalise()
 #endif

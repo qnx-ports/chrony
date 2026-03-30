@@ -236,17 +236,15 @@ static int
 apply_step_offset(double offset)
 {
   struct timespec old_time, new_time, T1;
-  struct timeval new_time_tv;
 
   stop_adjust();
 
   LCL_ReadRawTime(&old_time);
 
   UTI_AddDoubleToTimespec(&old_time, -offset, &new_time);
-  UTI_TimespecToTimeval(&new_time, &new_time_tv);
 
-  if (PRV_SetTime(&new_time_tv, NULL) < 0) {
-    DEBUG_LOG("settimeofday() failed");
+  if (PRV_SetTime(CLOCK_REALTIME, &new_time) < 0) {
+    DEBUG_LOG("clock_settime() failed");
     return 0;
   }
 
@@ -450,39 +448,6 @@ legacy_MacOSX_Finalise(void)
 
   clock_finalise();
 }
-
-/* ================================================== */
-
-#if HAVE_CLOCK_GETTIME
-int
-clock_gettime(clockid_t clock_id, struct timespec *ts)
-{
-  /* Check that the system clock_gettime symbol is actually present before
-     attempting to call it. The symbol is available in macOS 10.12
-     and later. */
-
-  static int init = 0;
-  static int (*sys_clock_gettime)(clockid_t, struct timespec *) = NULL;
-  int ret = 0;
-
-  if (!init) {
-    sys_clock_gettime = dlsym(RTLD_NEXT, "clock_gettime");
-    init = 1;
-  }
-
-  if (sys_clock_gettime != NULL) {
-    ret = sys_clock_gettime(clock_id, ts);
-  } else {
-    struct timeval tv;
-
-    if (gettimeofday(&tv, NULL) < 0)
-      LOG_FATAL("gettimeofday() failed : %s", strerror(errno));
-
-    UTI_TimevalToTimespec(&tv, ts);
-  }
-  return ret;
-}
-#endif
 
 /* ================================================== */
 

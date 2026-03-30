@@ -42,6 +42,9 @@
 #elif defined(NETBSD) || defined(FREEBSD)
 #include "sys_netbsd.h"
 #include "sys_posix.h"
+#elif defined(OPENBSD)
+#include "sys_openbsd.h"
+#include "sys_posix.h"
 #elif defined(MACOSX)
 #include "sys_macosx.h"
 #elif defined(QNX)
@@ -69,6 +72,8 @@ SYS_Initialise(int clock_control)
   SYS_Solaris_Initialise();
 #elif defined(NETBSD) || defined(FREEBSD)
   SYS_NetBSD_Initialise();
+#elif defined(OPENBSD)
+  SYS_OpenBSD_Initialise();
 #elif defined(MACOSX)
   SYS_MacOSX_Initialise();
 #elif defined(QNX)
@@ -93,6 +98,8 @@ SYS_Finalise(void)
   SYS_Solaris_Finalise();
 #elif defined(NETBSD) || defined(FREEBSD)
   SYS_NetBSD_Finalise();
+#elif defined(OPENBSD)
+  SYS_OpenBSD_Finalise();
 #elif defined(MACOSX)
   SYS_MacOSX_Finalise();
 #elif defined(QNX)
@@ -112,6 +119,8 @@ void SYS_DropRoot(uid_t uid, gid_t gid, SYS_ProcessContext context)
   SYS_Solaris_DropRoot(uid, gid, context);
 #elif (defined(NETBSD) || defined(FREEBSD)) && defined(FEAT_PRIVDROP)
   SYS_NetBSD_DropRoot(uid, gid, context, !null_driver);
+#elif defined(OPENBSD) && defined(FEAT_PRIVDROP)
+  SYS_OpenBSD_DropRoot(uid, gid, context, !null_driver);
 #elif defined(MACOSX) && defined(FEAT_PRIVDROP)
   SYS_MacOSX_DropRoot(uid, gid, context);
 #elif defined(QNX) && defined(FEAT_PRIVDROP)
@@ -127,6 +136,8 @@ void SYS_EnableSystemCallFilter(int level, SYS_ProcessContext context)
 {
 #if defined(LINUX) && defined(FEAT_SCFILTER)
   SYS_Linux_EnableSystemCallFilter(level, context);
+#elif defined(OPENBSD) && defined(FEAT_SCFILTER)
+  SYS_OpenBSD_EnableSystemCallFilter(level, context);
 #else
   LOG_FATAL("system call filter not supported");
 #endif

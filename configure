@@ -234,6 +234,7 @@ try_libcap=-1
 try_clockctl=0
 feat_scfilter=0
 try_seccomp=-1
+try_pledge=0
 priv_ops=""
 feat_ipv6=1
 feat_phc=1
@@ -462,6 +463,18 @@ case $OPERATINGSYSTEM in
         fi
         # QNX doesn't have SA_RESTART
         add_def SA_RESTART 0
+    ;;
+    
+    OpenBSD)
+        EXTRA_OBJECTS="sys_generic.o sys_openbsd.o sys_posix.o"
+        try_setsched=1
+        try_lockmem=1
+        try_pledge=1
+        add_def OPENBSD
+        if [ $feat_droproot = "1" ]; then
+          add_def FEAT_PRIVDROP
+          priv_ops="ADJUSTTIME ADJUSTFREQ SETTIME"
+        fi
         echo "Configuring for $SYSTEM"
     ;;
     Darwin)
@@ -577,7 +590,7 @@ else
 fi
 
 if [ "x$MYCC" = "xgcc" ] || [ "x$MYCC" = "xclang" ]; then
-  MYCFLAGS="$MYCFLAGS -Wmissing-prototypes -Wall"
+  MYCFLAGS="$MYCFLAGS -Wmissing-prototypes -Wshadow -Wall"
 fi
 
 if [ "x$PKG_CONFIG" = "x" ]; then
@@ -683,18 +696,18 @@ then
 fi
 
 if [ $try_clock_gettime = "1" ]; then
-  if test_code 'clock_gettime()' 'time.h' '' '' '
+  if ! test_code 'clock_gettime()' 'time.h' '' '' '
     struct timespec ts;
     clock_gettime(CLOCK_REALTIME, &ts);'
   then
-    add_def HAVE_CLOCK_GETTIME
-  else
     if test_code 'clock_gettime() in -lrt' 'time.h' '' '-lrt' '
       struct timespec ts;
       clock_gettime(CLOCK_REALTIME, &ts);'
     then
-      add_def HAVE_CLOCK_GETTIME
       EXTRA_LIBS="$EXTRA_LIBS -lrt"
+    else
+      echo "error: clock_gettime() not found"
+      exit 1
     fi
   fi
 fi
@@ -765,9 +778,10 @@ then
     struct scm_ts_pktinfo pktinfo;
     pktinfo.if_index = pktinfo.pkt_length = 0;
     return pktinfo.if_index + pktinfo.pkt_length + HWTSTAMP_FILTER_NTP_ALL +
-           SCM_TIMESTAMPING_PKTINFO +
+           SCM_TIMESTAMPING_PKTINFO + SOF_TIMESTAMPING_OPT_ID +
            SOF_TIMESTAMPING_OPT_PKTINFO + SOF_TIMESTAMPING_OPT_TX_SWHW;'; then
     add_def HAVE_LINUX_TIMESTAMPING_RXFILTER_NTP 1
+    add_def HAVE_LINUX_TIMESTAMPING_OPT_ID 1
     add_def HAVE_LINUX_TIMESTAMPING_OPT_PKTINFO 1
     add_def HAVE_LINUX_TIMESTAMPING_OPT_TX_SWHW 1
   fi
@@ -825,6 +839,13 @@ then
   # a time and the async resolver would block the main thread
   priv_ops="NAME2IPADDRESS RELOADDNS"
   EXTRA_LIBS="$EXTRA_LIBS -lseccomp"
+  EXTRA_OBJECTS="$EXTRA_OBJECTS sys_linux_scmp.o"
+fi
+
+if [ $feat_scfilter = "1" ] && [ $try_pledge = "1" ] && \
+  test_code 'pledge()' 'unistd.h' '' '' 'pledge("stdio", NULL);'
+then
+  add_def FEAT_SCFILTER
 fi
 
 if [ "x$priv_ops" != "x" ]; then
@@ -844,7 +865,6 @@ then
 fi
 
 if [ $feat_refclock = "1" ] && [ $feat_phc = "1" ] && [ $try_phc = "1" ] && \
-  grep '#define HAVE_CLOCK_GETTIME' config.h > /dev/null && \
   test_code '<linux/ptp_clock.h>' 'sys/ioctl.h linux/ptp_clock.h' '' '' \
     'ioctl(1, PTP_CLOCK_GETCAPS + PTP_SYS_OFFSET, 0);'
 then

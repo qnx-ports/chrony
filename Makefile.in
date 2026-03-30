@@ -101,7 +101,7 @@ install: chronyd chronyc
 	cp chronyc $(DESTDIR)$(BINDIR)/chronyc
 	chmod 755 $(DESTDIR)$(BINDIR)/chronyc
 
-%.o : %.c
+%.o : %.c config.h
 	$(CC) $(CFLAGS) $(CPPFLAGS) -c $<
 
 %.s : %.c

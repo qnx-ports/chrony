@@ -51,7 +51,7 @@
 
 static void measurement_timeout(void *any);
 
-static void read_from_device(int fd_, int event, void *any);
+static void read_from_device(int fd, int event, void *any);
 
 /* ================================================== */
 
@@ -65,7 +65,7 @@ static OperatingMode operating_mode = OM_NORMAL;
 
 /* ================================================== */
 
-static int fd;
+static int rtc_fd;
 
 #define LOWEST_MEASUREMENT_PERIOD 15
 #define HIGHEST_MEASUREMENT_PERIOD 480
@@ -297,14 +297,20 @@ slew_samples
    corresponding real time clock 'DMY HMS' form, taking account of
    whether the user runs his RTC on the local time zone or UTC */
 
-static void
+static int
 rtc_from_t(const time_t *t, struct rtc_time *rtc_raw, int utc)
 {
   struct tm *rtc_tm;
+
   if (utc) {
     rtc_tm = gmtime(t);
   } else {
     rtc_tm = localtime(t);
+  }
+
+  if (!rtc_tm) {
+    DEBUG_LOG("gmtime()/localtime() failed");
+    return 0;
   }
 
   rtc_raw->tm_sec = rtc_tm->tm_sec;
@@ -316,6 +322,8 @@ rtc_from_t(const time_t *t, struct rtc_time *rtc_raw, int utc)
   rtc_raw->tm_wday = rtc_tm->tm_wday;
   rtc_raw->tm_yday = rtc_tm->tm_yday;
   rtc_raw->tm_isdst = rtc_tm->tm_isdst;
+
+  return 1;
 }
 
 /* ================================================== */
@@ -522,21 +530,21 @@ int
 RTC_Linux_Initialise(void)
 {
   /* Try to open the device */
-  fd = open(CNF_GetRtcDevice(), O_RDWR);
-  if (fd < 0) {
+  rtc_fd = open(CNF_GetRtcDevice(), O_RDWR);
+  if (rtc_fd < 0) {
     LOG(LOGS_ERR, "Could not open RTC device %s : %s",
         CNF_GetRtcDevice(), strerror(errno));
     return 0;
   }
 
   /* Make sure the RTC supports interrupts */
-  if (!RTC_Linux_SwitchInterrupt(fd, 1) || !RTC_Linux_SwitchInterrupt(fd, 0)) {
-    close(fd);
+  if (!RTC_Linux_SwitchInterrupt(rtc_fd, 1) || !RTC_Linux_SwitchInterrupt(rtc_fd, 0)) {
+    close(rtc_fd);
     return 0;
   }
 
   /* Close on exec */
-  UTI_FdSetCloexec(fd);
+  UTI_FdSetCloexec(rtc_fd);
 
   rtc_sec = MallocArray(time_t, MAX_SAMPLES);
   system_times = MallocArray(struct timespec, MAX_SAMPLES);
@@ -557,7 +565,7 @@ RTC_Linux_Initialise(void)
   operating_mode = OM_NORMAL;
 
   /* Register file handler */
-  SCH_AddFileHandler(fd, SCH_FILE_INPUT, read_from_device, NULL);
+  SCH_AddFileHandler(rtc_fd, SCH_FILE_INPUT, read_from_device, NULL);
 
   /* Register slew handler */
   LCL_AddParameterChangeHandler(slew_samples, NULL);
@@ -577,10 +585,10 @@ RTC_Linux_Finalise(void)
   timeout_id = 0;
 
   /* Remove input file handler */
-  if (fd >= 0) {
-    SCH_RemoveFileHandler(fd);
-    RTC_Linux_SwitchInterrupt(fd, 0);
-    close(fd);
+  if (rtc_fd >= 0) {
+    SCH_RemoveFileHandler(rtc_fd);
+    RTC_Linux_SwitchInterrupt(rtc_fd, 0);
+    close(rtc_fd);
 
     /* Save the RTC data */
     (void) RTC_Linux_WriteParameters();
@@ -600,7 +608,7 @@ static void
 measurement_timeout(void *any)
 {
   timeout_id = 0;
-  RTC_Linux_SwitchInterrupt(fd, 1);
+  RTC_Linux_SwitchInterrupt(rtc_fd, 1);
 }
 
 /* ================================================== */
@@ -609,15 +617,11 @@ static void
 set_rtc(time_t new_rtc_time)
 {
   struct rtc_time rtc_raw;
-  int status;
 
-  rtc_from_t(&new_rtc_time, &rtc_raw, rtc_on_utc);
-
-  status = ioctl(fd, RTC_SET_TIME, &rtc_raw);
-  if (status < 0) {
+  if (!rtc_from_t(&new_rtc_time, &rtc_raw, rtc_on_utc) ||
+      ioctl(rtc_fd, RTC_SET_TIME, &rtc_raw) < 0) {
     LOG(LOGS_ERR, "Could not set RTC time");
   }
-
 }
 
 /* ================================================== */
@@ -810,25 +814,26 @@ RTC_Linux_ReadTimeAfterInterrupt(int fd, int utc,
 }
 
 static void
-read_from_device(int fd_, int event, void *any)
+read_from_device(int fd, int event, void *any)
 {
   struct timespec sys_time;
   int status, error = 0;
   time_t rtc_t;
 
-  status = RTC_Linux_CheckInterrupt(fd);
+  status = RTC_Linux_CheckInterrupt(rtc_fd);
   if (status < 0) {
-    SCH_RemoveFileHandler(fd);
-    RTC_Linux_SwitchInterrupt(fd, 0); /* Likely to raise error too, but just to be sure... */
-    close(fd);
-    fd = -1;
+    SCH_RemoveFileHandler(rtc_fd);
+    /* Likely to raise error too, but just to be sure... */
+    RTC_Linux_SwitchInterrupt(rtc_fd, 0);
+    close(rtc_fd);
+    rtc_fd = -1;
     return;
   } else if (status == 0) {
     /* Wait for the next interrupt, this one may be bogus */
     return;
   }
 
-  rtc_t = RTC_Linux_ReadTimeAfterInterrupt(fd, rtc_on_utc, &sys_time, NULL);
+  rtc_t = RTC_Linux_ReadTimeAfterInterrupt(rtc_fd, rtc_on_utc, &sys_time, NULL);
   if (rtc_t == (time_t)-1) {
     error = 1;
     goto turn_off_interrupt;
@@ -857,7 +862,7 @@ turn_off_interrupt:
         operating_mode = OM_NORMAL;
         (after_init_hook)(after_init_hook_arg);
 
-        RTC_Linux_SwitchInterrupt(fd, 0);
+        RTC_Linux_SwitchInterrupt(rtc_fd, 0);
     
         timeout_id = SCH_AddTimeoutByDelay((double) measurement_period, measurement_timeout, NULL);
       }
@@ -869,7 +874,7 @@ turn_off_interrupt:
         DEBUG_LOG("Could not complete after trim relock due to errors");
         operating_mode = OM_NORMAL;
 
-        RTC_Linux_SwitchInterrupt(fd, 0);
+        RTC_Linux_SwitchInterrupt(rtc_fd, 0);
     
         timeout_id = SCH_AddTimeoutByDelay((double) measurement_period, measurement_timeout, NULL);
       }
@@ -877,7 +882,7 @@ turn_off_interrupt:
       break;
 
     case OM_NORMAL:
-      RTC_Linux_SwitchInterrupt(fd, 0);
+      RTC_Linux_SwitchInterrupt(rtc_fd, 0);
     
       timeout_id = SCH_AddTimeoutByDelay((double) measurement_period, measurement_timeout, NULL);
 
@@ -899,7 +904,7 @@ RTC_Linux_TimeInit(void (*after_hook)(void *), void *anything)
 
   operating_mode = OM_INITIAL;
   timeout_id = 0;
-  RTC_Linux_SwitchInterrupt(fd, 1);
+  RTC_Linux_SwitchInterrupt(rtc_fd, 1);
 }
 
 /* ================================================== */
@@ -917,7 +922,7 @@ RTC_Linux_WriteParameters(void)
 {
   int retval;
 
-  if (fd < 0) {
+  if (rtc_fd < 0) {
     return RTC_ST_NODRV;
   }
   
@@ -1086,7 +1091,7 @@ RTC_Linux_Trim(void)
     /* And start rapid sampling, interrupts on now */
     SCH_RemoveTimeout(timeout_id);
     timeout_id = 0;
-    RTC_Linux_SwitchInterrupt(fd, 1);
+    RTC_Linux_SwitchInterrupt(rtc_fd, 1);
   }
 
   return 1;

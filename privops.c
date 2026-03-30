@@ -34,6 +34,7 @@
 #include "logging.h"
 #include "privops.h"
 #include "socket.h"
+#include "sys.h"
 #include "util.h"
 
 #define OP_ADJUSTTIME     1024
@@ -42,6 +43,7 @@
 #define OP_BINDSOCKET     1027
 #define OP_NAME2IPADDRESS 1028
 #define OP_RELOADDNS      1029
+#define OP_ADJUSTFREQ     1030
 #define OP_QUIT           1099
 
 union sockaddr_in46 {
@@ -65,7 +67,7 @@ typedef struct {
 #endif
 
 typedef struct {
-  struct timeval tv;
+  struct timespec ts;
 } ReqSetTime;
 
 typedef struct {
@@ -78,6 +80,13 @@ typedef struct {
   char name[256];
 } ReqName2IPAddress;
 
+#ifdef PRIVOPS_ADJUSTFREQ
+typedef struct {
+  int64_t freq;
+  int is_read_adj;
+} ReqAdjustFreq;
+#endif
+
 typedef struct {
   int op;
   union {
@@ -89,6 +98,9 @@ typedef struct {
     ReqBindSocket bind_socket;
 #ifdef PRIVOPS_NAME2IPADDRESS
     ReqName2IPAddress name_to_ipaddress;
+#endif
+#ifdef PRIVOPS_ADJUSTFREQ
+    ReqAdjustFreq adjust_freq;
 #endif
   } data;
 } PrvRequest;
@@ -110,6 +122,10 @@ typedef struct {
 } ResName2IPAddress;
 
 typedef struct {
+  int64_t oldfreq;
+} ResAdjustFreq;
+
+typedef struct {
   char msg[256];
 } ResFatalMsg;
 
@@ -126,11 +142,15 @@ typedef struct {
 #ifdef PRIVOPS_NAME2IPADDRESS
     ResName2IPAddress name_to_ipaddress;
 #endif
+#ifdef PRIVOPS_ADJUSTFREQ
+    ResAdjustFreq adjust_freq;
+#endif
   } data;
 } PrvResponse;
 
 static int helper_fd;
 static pid_t helper_pid;
+static int scfilter_level;
 
 static int
 have_helper(void)
@@ -225,13 +245,13 @@ do_adjust_timex(const ReqAdjustTimex *req, PrvResponse *res)
 
 /* ======================================================================= */
 
-/* HELPER - perform settimeofday() */
+/* HELPER - perform clock_settime() */
 
 #ifdef PRIVOPS_SETTIME
 static void
 do_set_time(const ReqSetTime *req, PrvResponse *res)
 {
-  res->rc = settimeofday(&req->tv, NULL);
+  res->rc = clock_settime(CLOCK_REALTIME, &req->ts);
   if (res->rc)
     res->res_errno = errno;
 }
@@ -300,6 +320,22 @@ do_reload_dns(PrvResponse *res)
 }
 #endif
 
+
+/* ======================================================================= */
+
+/* HELPER - perform adjustfreq() */
+
+#ifdef PRIVOPS_ADJUSTFREQ
+static void
+do_adjust_freq(const ReqAdjustFreq *req, PrvResponse *res)
+{
+  res->rc = adjfreq(req->is_read_adj ? NULL : &req->freq,
+                    &res->data.adjust_freq.oldfreq);
+  if (res->rc)
+    res->res_errno = errno;
+}
+#endif
+
 /* ======================================================================= */
 
 /* HELPER - main loop - action requests from the daemon */
@@ -347,6 +383,11 @@ helper_main(int fd)
 #ifdef PRIVOPS_RELOADDNS
       case OP_RELOADDNS:
         do_reload_dns(&res);
+        break;
+#endif
+#ifdef PRIVOPS_ADJUSTFREQ
+      case OP_ADJUSTFREQ:
+        do_adjust_freq(&req.data.adjust_freq, &res);
         break;
 #endif
       case OP_QUIT:
@@ -508,25 +549,24 @@ PRV_AdjustTimex(struct timex *tmx)
 
 /* ======================================================================= */
 
-/* DAEMON - request settimeofday() */
+/* DAEMON - request clock_settime() */
 
 #ifdef PRIVOPS_SETTIME
 int
-PRV_SetTime(const struct timeval *tp, const struct timezone *tzp)
+PRV_SetTime(clockid_t clockid, const struct timespec *tp)
 {
   PrvRequest req;
   PrvResponse res;
 
-  /* only support setting the time */
-  assert(tp != NULL);
-  assert(tzp == NULL);
+  if (clockid != CLOCK_REALTIME)
+    return -1;
 
   if (!have_helper())
-    return settimeofday(tp, NULL);
+    return clock_settime(clockid, tp);
 
   memset(&req, 0, sizeof (req));
   req.op = OP_SETTIME;
-  req.data.set_time.tv = *tp;
+  req.data.set_time.ts = *tp;
 
   submit_request(&req, &res);
 
@@ -624,10 +664,43 @@ PRV_ReloadDNS(void)
 
 /* ======================================================================= */
 
+/* DAEMON - request adjfreq() */
+
+#ifdef PRIVOPS_ADJUSTFREQ
+int
+PRV_AdjustFreq(const int64_t *freq, int64_t *oldfreq)
+{
+  PrvRequest req;
+  PrvResponse res;
+
+  if (!have_helper())
+    /* helper is not running */
+    return adjfreq(freq, oldfreq);
+
+  memset(&req, 0, sizeof (req));
+  req.op = OP_ADJUSTFREQ;
+
+  if (freq == NULL)
+    req.data.adjust_freq.is_read_adj = 1;
+  else
+    req.data.adjust_freq.freq = *freq;
+
+  submit_request(&req, &res);
+
+  if (oldfreq)
+    *oldfreq = res.data.adjust_freq.oldfreq;
+
+  return res.rc;
+}
+#endif
+
+/* ======================================================================= */
+
 void
-PRV_Initialise(void)
+PRV_Initialise(int level)
 {
   helper_fd = -1;
+  scfilter_level = level;
 }
 
 /* ======================================================================= */
@@ -667,6 +740,9 @@ PRV_StartHelper(void)
 
     /* ignore signals, the process will exit on OP_QUIT request */
     UTI_SetQuitSignalsHandler(SIG_IGN, 1);
+
+    if (scfilter_level != 0)
+      SYS_EnableSystemCallFilter(scfilter_level, SYS_PRIVOPS_HELPER);
 
     helper_main(sock_fd2);
 

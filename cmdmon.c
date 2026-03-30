@@ -504,14 +504,17 @@ handle_source_data(CMD_Request *rx_message, CMD_Reply *tx_message)
   if (SRC_ReportSource(ntohl(rx_message->data.source_data.index), &report, &now_corr)) {
     switch (SRC_GetType(ntohl(rx_message->data.source_data.index))) {
       case SRC_NTP:
-        NSR_ReportSource(&report, &now_corr);
+        if (!NSR_ReportSource(&report.ip_addr, &report))
+          return;
         break;
       case SRC_REFCLOCK:
-        RCL_ReportSource(&report, &now_corr);
+        if (report.ip_addr.family != IPADDR_INET4 ||
+            !RCL_ReportSource(report.ip_addr.addr.in4, &report))
+          return;
         break;
+      default:
+        return;
     }
-    
-    tx_message->reply  = htons(RPY_SOURCE_DATA);
     
     UTI_IPHostToNetwork(&report.ip_addr, &tx_message->data.source_data.ip_addr);
     tx_message->data.source_data.stratum = htons(report.stratum);
@@ -535,6 +538,8 @@ handle_source_data(CMD_Request *rx_message, CMD_Reply *tx_message)
       case RPT_SELECTED:
         tx_message->data.source_data.state   = htons(RPY_SD_ST_SELECTED);
         break;
+      default:
+        return;
     }
     switch (report.mode) {
       case RPT_NTP_CLIENT:
@@ -546,6 +551,8 @@ handle_source_data(CMD_Request *rx_message, CMD_Reply *tx_message)
       case RPT_LOCAL_REFERENCE:
         tx_message->data.source_data.mode    = htons(RPY_SD_MD_REF);
         break;
+      default:
+        return;
     }
     tx_message->data.source_data.flags = htons(0);
     tx_message->data.source_data.reachability = htons(report.reachability);
@@ -553,6 +560,8 @@ handle_source_data(CMD_Request *rx_message, CMD_Reply *tx_message)
     tx_message->data.source_data.orig_latest_meas = UTI_FloatHostToNetwork(report.orig_latest_meas);
     tx_message->data.source_data.latest_meas = UTI_FloatHostToNetwork(report.latest_meas);
     tx_message->data.source_data.latest_meas_err = UTI_FloatHostToNetwork(report.latest_meas_err);
+
+    tx_message->reply = htons(RPY_SOURCE_DATA);
   } else {
     tx_message->status = htons(STT_NOSUCHSOURCE);
   }
@@ -710,8 +719,7 @@ handle_add_source(CMD_Request *rx_message, CMD_Reply *tx_message)
   params.nts = !!(flags & REQ_ADDSRC_NTS);
   params.copy = !!(flags & REQ_ADDSRC_COPY);
   params.ext_fields = (flags & REQ_ADDSRC_EF_EXP_MONO_ROOT ? NTP_EF_FLAG_EXP_MONO_ROOT : 0) |
-                      (flags & REQ_ADDSRC_EF_EXP_NET_CORRECTION ?
-                       NTP_EF_FLAG_EXP_NET_CORRECTION : 0);
+                      (flags & REQ_ADDSRC_EF_NET_CORRECTION ? NTP_EF_FLAG_NET_CORRECTION : 0);
   params.sel_options = convert_addsrc_select_options(ntohl(rx_message->data.ntp_source.flags));
 
   status = NSR_AddSourceByName(name, family, port, pool, type, &params, NULL);
@@ -1595,7 +1603,7 @@ read_from_cmd_socket(int sock_fd, int event, void *anything)
   CMD_Reply tx_message;
   IPAddr loopback_addr, remote_ip;
   uint16_t rx_command;
-  struct timespec now, cooked_now;
+  struct timespec cooked_now;
 
   sck_message = SCK_ReceiveMessage(sock_fd, 0);
   if (!sck_message)
@@ -1604,7 +1612,7 @@ read_from_cmd_socket(int sock_fd, int event, void *anything)
   read_length = sck_message->length;
 
   /* Get current time cheaply */
-  SCH_GetLastEventTime(&cooked_now, NULL, &now);
+  SCH_GetLastEventTime(&cooked_now, NULL, NULL);
 
   /* Check if the request came from the Unix domain socket, or network and
      whether the address is allowed (127.0.0.1 and ::1 is always allowed) */

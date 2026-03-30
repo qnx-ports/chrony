@@ -54,7 +54,6 @@ static int initialised = 0;
 /* ================================================== */
 /* Structure used to hold info for selecting between sources */
 struct SelectInfo {
-  int select_ok;
   double std_dev;
   double root_distance;
   double lo_limit;
@@ -70,6 +69,7 @@ typedef enum {
   SRC_UNSELECTABLE,     /* Has noselect option set */
   SRC_BAD_STATS,        /* Doesn't have valid stats data */
   SRC_UNSYNCHRONISED,   /* Provides samples, but not synchronised */
+  SRC_BAD_STRATUM,      /* Has stratum outside of allowed range */
   SRC_BAD_DISTANCE,     /* Has root distance longer than allowed maximum */
   SRC_JITTERY,          /* Had std dev larger than allowed maximum */
   SRC_WAITS_STATS,      /* Others have bad stats, selection postponed */
@@ -198,6 +198,8 @@ static int forced_first_report;   /* Flag to allow one failed selection to be
 
 static double max_distance;
 static double max_jitter;
+static int max_stratum;
+static int min_stratum;
 static double reselect_distance;
 static double stratum_weight;
 static double combine_limit;
@@ -231,6 +233,8 @@ void SRC_Initialise(void) {
   selected_source_index = INVALID_SOURCE;
   max_distance = CNF_GetMaxDistance();
   max_jitter = CNF_GetMaxJitter();
+  max_stratum = CNF_GetMaxStratum();
+  min_stratum = CNF_GetMinStratum();
   reselect_distance = CNF_GetReselectDistance();
   stratum_weight = CNF_GetStratumWeight();
   combine_limit = CNF_GetCombineLimit();
@@ -739,7 +743,8 @@ set_source_status(SRC_Instance inst, SRC_Status status)
      distance or jitter larger than the allowed maximums */
   if (inst == last_updated_inst) {
     if (inst->bad < INT_MAX &&
-        (status == SRC_FALSETICKER || status == SRC_BAD_DISTANCE || status == SRC_JITTERY))
+        (status == SRC_FALSETICKER || status == SRC_BAD_DISTANCE ||
+         status == SRC_BAD_STRATUM || status == SRC_JITTERY))
       inst->bad++;
     else
       inst->bad = 0;
@@ -783,6 +788,14 @@ mark_source(SRC_Instance inst, SRC_Status status)
 
   if (!inst->reported_status[status]) {
     switch (status) {
+      case SRC_BAD_STRATUM:
+        if (inst->bad < BAD_HANDLE_THRESHOLD)
+          break;
+        log_selection_source(LOGS_WARN, inst,
+                             "Stratum of ## %sstratum of %d",
+                             inst->stratum < min_stratum ? "below min" : "above max",
+                             inst->stratum < min_stratum ? min_stratum : max_stratum);
+        break;
       case SRC_BAD_DISTANCE:
         if (inst->bad < BAD_HANDLE_THRESHOLD)
           break;
@@ -955,7 +968,7 @@ SRC_SelectSource(SRC_Instance updated_inst)
   int max_badstat_reach, max_badstat_reach_size, n_badstats_sources;
   int max_sel_reach, max_sel_reach_size, n_unreach_sources;
   int depth, best_depth, trust_depth, best_trust_depth, n_sel_trust_sources;
-  int combined, stratum, min_stratum, max_score_index;
+  int combined, stratum, min_sel_stratum, max_score_index;
   int orphan_stratum, orphan_source;
   double src_offset, src_offset_sd, src_frequency, src_frequency_sd, src_skew;
   double src_root_delay, src_root_dispersion;
@@ -1010,12 +1023,10 @@ SRC_SelectSource(SRC_Instance updated_inst)
       n_unreach_sources++;
 
     si = &sources[i]->sel_info;
-    SST_GetSelectionData(sources[i]->stats, &now,
-                         &si->lo_limit, &si->hi_limit, &si->root_distance,
-                         &si->std_dev, &first_sample_ago,
-                         &si->last_sample_ago, &si->select_ok);
 
-    if (!si->select_ok) {
+    if (!SST_GetSelectionData(sources[i]->stats, &now, &si->lo_limit, &si->hi_limit,
+                              &si->root_distance, &si->std_dev, &first_sample_ago,
+                              &si->last_sample_ago)) {
       ++n_badstats_sources;
       mark_source(sources[i], SRC_BAD_STATS);
       if (max_badstat_reach < sources[i]->reachability)
@@ -1028,6 +1039,12 @@ SRC_SelectSource(SRC_Instance updated_inst)
     /* Ignore sources which are not synchronised */
     if (sources[i]->leap == LEAP_Unsynchronised) {
       mark_source(sources[i], SRC_UNSYNCHRONISED);
+      continue;
+    }
+
+    /* Require the stratum to be in the allowed range */
+    if (sources[i]->stratum < min_stratum || sources[i]->stratum > max_stratum) {
+      mark_source(sources[i], SRC_BAD_STRATUM);
       continue;
     }
 
@@ -1364,12 +1381,12 @@ SRC_SelectSource(SRC_Instance updated_inst)
   /* Find minimum stratum */
 
   index = sel_sources[0];
-  min_stratum = sources[index]->stratum;
+  min_sel_stratum = sources[index]->stratum;
   for (i = 1; i < n_sel_sources; i++) {
     index = sel_sources[i];
     stratum = sources[index]->stratum;
-    if (stratum < min_stratum)
-      min_stratum = stratum;
+    if (min_sel_stratum > stratum)
+      min_sel_stratum = stratum;
   }
 
   /* Update scores and find the source with maximum score */
@@ -1380,7 +1397,7 @@ SRC_SelectSource(SRC_Instance updated_inst)
 
   if (selected_source_index != INVALID_SOURCE)
     sel_src_distance = sources[selected_source_index]->sel_info.root_distance +
-      (sources[selected_source_index]->stratum - min_stratum) * stratum_weight;
+      (sources[selected_source_index]->stratum - min_sel_stratum) * stratum_weight;
 
   for (i = 0; i < n_sources; i++) {
     /* Reset score for non-selectable sources */
@@ -1392,7 +1409,7 @@ SRC_SelectSource(SRC_Instance updated_inst)
     }
 
     distance = sources[i]->sel_info.root_distance +
-      (sources[i]->stratum - min_stratum) * stratum_weight;
+      (sources[i]->stratum - min_sel_stratum) * stratum_weight;
     if (sources[i]->type == SRC_NTP)
       distance += reselect_distance;
 
@@ -1917,6 +1934,8 @@ get_status_char(SRC_Status status)
       return 'M';
     case SRC_UNSYNCHRONISED:
       return 's';
+    case SRC_BAD_STRATUM:
+      return 'r';
     case SRC_BAD_DISTANCE:
       return 'd';
     case SRC_JITTERY:

@@ -2,7 +2,7 @@
   chronyd/chronyc - Programs for keeping computer clocks accurate.
 
  **********************************************************************
- * Copyright (C) Miroslav Lichvar  2016
+ * Copyright (C) Miroslav Lichvar  2025
  * 
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of version 2 of the GNU General Public License as
@@ -21,26 +21,8 @@
 
   =======================================================================
 
-  This is the header file for the Linux-specific NTP socket I/O bits.
+  Header file for lists that are needed in seccomp filters but need to
+  be compiled separately from sys_linux.c due to conflicting headers.
   */
 
-#ifndef GOT_NTP_IO_LINUX_H
-#define GOT_NTP_IO_LINUX_H
-
-#include "socket.h"
-
-extern void NIO_Linux_Initialise(void);
-
-extern void NIO_Linux_Finalise(void);
-
-extern int NIO_Linux_IsHwTsEnabled(void);
-
-extern int NIO_Linux_SetTimestampSocketOptions(int sock_fd, int client_only, int *events);
-
-extern int NIO_Linux_ProcessMessage(SCK_Message *message, NTP_Local_Address *local_addr,
-                                    NTP_Local_Timestamp *local_ts, int event);
-
-extern void NIO_Linux_RequestTxTimestamp(SCK_Message *message, int sock_fd,
-                                         NTP_Remote_Address *remote_addr);
-
-#endif
+extern unsigned long SYS_Linux_GetExtraScmpIoctl(int index);

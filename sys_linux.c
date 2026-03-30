@@ -63,6 +63,7 @@
 #endif
 
 #include "sys_linux.h"
+#include "sys_linux_scmp.h"
 #include "sys_timex.h"
 #include "conf.h"
 #include "local.h"
@@ -93,8 +94,7 @@ static int current_delta_tick;
 static int max_tick_bias;
 
 /* The kernel USER_HZ constant */
-static int hz;
-static double dhz; /* And dbl prec version of same for arithmetic */
+static double sys_hz;
 
 /* The assumed rate at which the effective frequency and tick values are
    updated in the kernel */
@@ -137,23 +137,8 @@ set_frequency(double freq_ppm)
   double required_freq;
   int required_delta_tick;
 
-  required_delta_tick = round(freq_ppm / dhz);
-
-  /* Older kernels (pre-2.6.18) don't apply the frequency offset exactly as
-     set by adjtimex() and a scaling constant (that depends on the internal
-     kernel HZ constant) would be needed to compensate for the error. Because
-     chronyd is closed loop it doesn't matter much if we don't scale the
-     required frequency, but we want to prevent thrashing between two states
-     when the system's frequency error is close to a multiple of USER_HZ.  With
-     USER_HZ <= 250, the maximum frequency adjustment of 500 ppm overlaps at
-     least two ticks and we can stick to the current tick if it's next to the
-     required tick. */
-  if (hz <= 250 && (required_delta_tick + 1 == current_delta_tick ||
-                    required_delta_tick - 1 == current_delta_tick)) {
-    required_delta_tick = current_delta_tick;
-  }
-
-  required_freq = -(freq_ppm - dhz * required_delta_tick);
+  required_delta_tick = round(freq_ppm / sys_hz);
+  required_freq = -(freq_ppm - sys_hz * required_delta_tick);
   required_tick = nominal_tick - required_delta_tick;
 
   txc.modes = ADJ_TICK | ADJ_FREQUENCY;
@@ -164,7 +149,7 @@ set_frequency(double freq_ppm)
 
   current_delta_tick = required_delta_tick;
 
-  return dhz * current_delta_tick - txc.freq / FREQ_SCALE;
+  return sys_hz * current_delta_tick - txc.freq / FREQ_SCALE;
 }
 
 /* ================================================== */
@@ -181,7 +166,7 @@ read_frequency(void)
 
   current_delta_tick = nominal_tick - txc.tick;
 
-  return dhz * current_delta_tick - txc.freq / FREQ_SCALE;
+  return sys_hz * current_delta_tick - txc.freq / FREQ_SCALE;
 }
 
 /* ================================================== */
@@ -277,14 +262,15 @@ get_kernel_version(int *major, int *minor, int *patch)
 static void
 get_version_specific_details(void)
 {
-  int major, minor, patch;
+  int hz, major, minor, patch;
   
   hz = get_hz();
 
   if (!hz)
     hz = guess_hz();
 
-  dhz = (double) hz;
+  sys_hz = hz;
+
   nominal_tick = (1000000L + (hz/2))/hz; /* Mirror declaration in kernel */
   max_tick_bias = nominal_tick / 10;
 
@@ -441,7 +427,7 @@ SYS_Linux_EnableSystemCallFilter(int level, SYS_ProcessContext context)
     SCMP_SYS(clock_gettime64),
 #endif
     SCMP_SYS(gettimeofday),
-    SCMP_SYS(settimeofday),
+    SCMP_SYS(clock_settime),
     SCMP_SYS(time),
 
     /* Process */
@@ -672,6 +658,9 @@ SYS_Linux_EnableSystemCallFilter(int level, SYS_ProcessContext context)
        modules are installed and enabled on the system). */
     if (default_action != SCMP_ACT_ALLOW)
       PRV_StartHelper();
+  } else if (context == SYS_PRIVOPS_HELPER) {
+    /* The privops helper on Linux doesn't have any filter loaded */
+    return;
   }
 
   ctx = seccomp_init(default_action);
@@ -726,6 +715,14 @@ SYS_Linux_EnableSystemCallFilter(int level, SYS_ProcessContext context)
     for (i = 0; i < sizeof (ioctls) / sizeof (*ioctls); i++) {
       if (seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(ioctl), 1,
                            SCMP_A1(SCMP_CMP_EQ, ioctls[i])) < 0)
+        goto add_failed;
+    }
+
+    /* Allow selected ioctls that need to be specified in a separate
+       file to avoid conflicting headers (e.g. TCGETS2) */
+    for (i = 0; SYS_Linux_GetExtraScmpIoctl(i) != 0; i++) {
+      if (seccomp_rule_add(ctx, SCMP_ACT_ALLOW, SCMP_SYS(ioctl), 1,
+                           SCMP_A1(SCMP_CMP_EQ, SYS_Linux_GetExtraScmpIoctl(i))) < 0)
         goto add_failed;
     }
   }

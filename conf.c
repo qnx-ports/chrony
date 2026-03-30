@@ -115,6 +115,8 @@ static double clock_precision = 0.0; /* in seconds */
 static SRC_AuthSelectMode authselect_mode = SRC_AUTHSELECT_MIX;
 static double max_distance = 3.0;
 static double max_jitter = 1.0;
+static int max_stratum = NTP_MAX_STRATUM - 1;
+static int min_stratum = 0;
 static double reselect_distance = 1e-4;
 static double stratum_weight = 1e-3;
 static double combine_limit = 3.0;
@@ -297,6 +299,9 @@ static ARR_Instance hwts_interfaces;
 
 /* Timeout for resuming reading from sockets waiting for HW TX timestamp */
 static double hwts_timeout = 0.001;
+
+/* Maximum number of saved messages for TX timestamp identification */
+static int max_tx_buffers = 0;
 
 /* PTP event port (disabled by default) */
 static int ptp_port = 0;
@@ -702,12 +707,18 @@ CNF_ParseLine(const char *filename, int number, char *line)
     parse_int(p, &max_samples, 0, INT_MAX);
   } else if (!strcasecmp(command, "maxslewrate")) {
     parse_double(p, &max_slew_rate);
+  } else if (!strcasecmp(command, "maxstratum")) {
+    parse_int(p, &max_stratum, 0, INT_MAX);
   } else if (!strcasecmp(command, "maxupdateskew")) {
     parse_double(p, &max_update_skew);
+  } else if (!strcasecmp(command, "maxtxbuffers")) {
+    parse_int(p, &max_tx_buffers, 0, 1048576);
   } else if (!strcasecmp(command, "minsamples")) {
     parse_int(p, &min_samples, 0, INT_MAX);
   } else if (!strcasecmp(command, "minsources")) {
     parse_int(p, &min_sources, 1, INT_MAX);
+  } else if (!strcasecmp(command, "minstratum")) {
+    parse_int(p, &min_stratum, 0, INT_MAX);
   } else if (!strcasecmp(command, "nocerttimecheck")) {
     parse_int(p, &no_cert_time_check, 0, INT_MAX);
   } else if (!strcasecmp(command, "noclientlog")) {
@@ -957,7 +968,7 @@ parse_ratelimit(char *line, int *enabled, int *interval, int *burst, int *leak, 
 static void
 parse_refclock(char *line)
 {
-  int n, poll, dpoll, filter_length, pps_rate, min_samples, max_samples, sel_options;
+  int n, poll, dpoll, filter_length, pps_rate, min_samples_, max_samples_, sel_options;
   int local, max_lock_age, max_unreach, pps_forced, sel_option, stratum, tai;
   uint32_t ref_id, lock_ref_id;
   double offset, delay, precision, max_dispersion, pulse_width;
@@ -970,8 +981,8 @@ parse_refclock(char *line)
   local = 0;
   pps_forced = 0;
   pps_rate = 0;
-  min_samples = SRC_DEFAULT_MINSAMPLES;
-  max_samples = SRC_DEFAULT_MAXSAMPLES;
+  min_samples_ = SRC_DEFAULT_MINSAMPLES;
+  max_samples_ = SRC_DEFAULT_MAXSAMPLES;
   max_unreach = SRC_DEFAULT_MAXUNREACH;
   sel_options = 0;
   offset = 0.0;
@@ -1029,13 +1040,13 @@ parse_refclock(char *line)
       if (!SSCANF_IN_RANGE(line, "%d%n", &pps_rate, &n, 1, INT_MAX))
         break;
     } else if (!strcasecmp(cmd, "minsamples")) {
-      if (!SSCANF_IN_RANGE(line, "%d%n", &min_samples, &n, 0, INT_MAX))
+      if (!SSCANF_IN_RANGE(line, "%d%n", &min_samples_, &n, 0, INT_MAX))
         break;
     } else if (!strcasecmp(cmd, "maxlockage")) {
       if (!SSCANF_IN_RANGE(line, "%d%n", &max_lock_age, &n, 0, INT_MAX))
         break;
     } else if (!strcasecmp(cmd, "maxsamples")) {
-      if (!SSCANF_IN_RANGE(line, "%d%n", &max_samples, &n, 0, INT_MAX))
+      if (!SSCANF_IN_RANGE(line, "%d%n", &max_samples_, &n, 0, INT_MAX))
         break;
     } else if (!strcasecmp(cmd, "maxunreach")) {
       if (!SSCANF_IN_RANGE(line, "%d%n", &max_unreach, &n, 0, INT_MAX))
@@ -1087,8 +1098,8 @@ parse_refclock(char *line)
   refclock->local = local;
   refclock->pps_forced = pps_forced;
   refclock->pps_rate = pps_rate;
-  refclock->min_samples = min_samples;
-  refclock->max_samples = max_samples;
+  refclock->min_samples = min_samples_;
+  refclock->max_samples = max_samples_;
   refclock->max_unreach = max_unreach;
   refclock->sel_options = sel_options;
   refclock->stratum = stratum;
@@ -2311,6 +2322,22 @@ CNF_GetMaxJitter(void)
 
 /* ================================================== */
 
+int
+CNF_GetMaxStratum(void)
+{
+  return max_stratum;
+}
+
+/* ================================================== */
+
+int
+CNF_GetMinStratum(void)
+{
+  return min_stratum;
+}
+
+/* ================================================== */
+
 double
 CNF_GetReselectDistance(void)
 {
@@ -2421,16 +2448,16 @@ CNF_GetLogChange(void)
 /* ================================================== */
 
 void
-CNF_GetMailOnChange(int *enabled, double *threshold, char **user)
+CNF_GetMailOnChange(int *enabled, double *threshold, char **user_)
 {
   if (mail_user_on_change) {
     *enabled = 1;
     *threshold = mail_change_threshold;
-    *user = mail_user_on_change;
+    *user_ = mail_user_on_change;
   } else {
     *enabled = 0;
     *threshold = 0.0;
-    *user = NULL;
+    *user_ = NULL;
   }
 }  
 
@@ -2752,6 +2779,14 @@ double
 CNF_GetHwTsTimeout(void)
 {
   return hwts_timeout;
+}
+
+/* ================================================== */
+
+int
+CNF_GetMaxTxBuffers(void)
+{
+  return max_tx_buffers;
 }
 
 /* ================================================== */

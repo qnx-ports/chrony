@@ -71,8 +71,10 @@ also when the <<chronyc.adoc#online,*online*>> command is issued in *chronyc*.
 The DNS record can change over time. The used address will be replaced with a
 newly resolved address when the server becomes unreachable (i.e. no valid
 response to the last 8 requests), unsynchronised, a falseticker (i.e. does not
-agree with a majority of other sources), or the root distance is too large (the
-limit can be configured by the <<maxdistance,*maxdistance*>> directive). The
+agree with a majority of other sources), the root distance is too large (the
+limit can be configured by the <<maxdistance,*maxdistance*>> directive), or
+the stratum is too small or too large (the limits can be configured by the
+<<minstratum,*minstratum*>> and <<maxstratum,*maxstratum*>> directives). The
 automatic replacement happens at most once per 30 minutes and only one
 server can be replaced at a time. The address is also refreshed periodically
 when the server is working normally (the interval can be configured by the
@@ -318,7 +320,8 @@ with lower stratum are normally slightly preferred. This option can be used to
 increase stratum of the source to the specified minimum, so *chronyd* will
 avoid selecting that source. This is useful with low-stratum sources that are
 known to be unreliable or inaccurate and that should be used only when other
-sources are unreachable.
+sources are unreachable. Note that the <<minstratum,*minstratum*>> directive
+is distinct from this option.
 *version* _version_:::
 This option sets the NTP version of packets sent to the server. This can be
 useful when the server runs an old NTP implementation that does not respond to
@@ -349,6 +352,21 @@ This option can be used multiple times to enable multiple extension fields.
 +
 The following extension fields are supported:
 +
+_10A_::::
+The Network Correction extension field enabling the use of the Precision Time
+Protocol (PTP) corrections in NTP-over-PTP messages updated by
+one-step end-to-end transparent clocks (e.g. network switches). It can
+significantly improve the accuracy and stability of the synchronisation. NTP
+over PTP needs to be enabled by the <<ptpport,*ptpport*>> directive and setting
+the *port* option to the PTP port. The corrections are applied only to NTP
+measurements with HW timestamps (enabled by the <<hwtimestamp,*hwtimestamp*>>
+directive).
++
+This field should be enabled only for servers known to be running *chronyd*
+version 4.9 or later, or other implementations supporting the Network
+Correction extension field. *chronyd* versions 4.5-4.8 supported an experimental
+version of this extension field (type _F324_), which is no longer supported,
+but type _F324_ is accepted as an alias for _10A_.
 _F323_::::
 An experimental extension field to enable several improvements that were
 proposed for the next version of the NTP protocol (NTPv5). The field contains
@@ -356,16 +374,6 @@ root delay and dispersion in higher resolution and a monotonic receive
 timestamp, which enables a frequency transfer between the server and client to
 significantly improve stability of the synchronisation. This field should be
 enabled only for servers known to be running *chronyd* version 4.2 or later.
-_F324_::::
-An experimental extension field to enable the use of the Precision Time
-Protocol (PTP) correction field in NTP-over-PTP messages updated by one-step
-end-to-end transparent clocks in network switches and routers to significantly
-improve accuracy and stability of the synchronisation. NTP-over-PTP can be
-enabled by the <<ptpport,*ptpport*>> directive and setting the *port* option to
-the PTP port. The corrections are applied only to NTP measurements with HW
-timestamps (enabled by the <<hwtimestamp,*hwtimestamp*>> directive). This
-field should be enabled only for servers known to be running *chronyd* version
-4.5 or later.
 *ipv4*:::
 *ipv6*:::
 These options force *chronyd* to use only IPv4 or IPv6 addresses respectively
@@ -1102,6 +1110,16 @@ with sources that have a small root distance, but their time is too variable.
 +
 By default, the maximum jitter is 1 second.
 
+[[maxstratum]]*maxstratum* _stratum_::
+The *maxstratum* directive sets the maximum allowed stratum of the sources to
+be selected for synchronisation. The default value is 15. The useful range is 0
+to 15.
+
+[[minstratum]]*minstratum* _stratum_::
+The *minstratum* directive sets the minimum allowed stratum of the sources to
+be selected for synchronisation. The default value is 0. The useful range is 0
+to 15.
+
 [[minsources]]*minsources* _sources_::
 The *minsources* directive sets the minimum number of sources that need to be
 considered as selectable in the source selection algorithm before the local
@@ -1133,23 +1151,29 @@ distances are in milliseconds.
 
 [[clockprecision]]*clockprecision* _precision_::
 The *clockprecision* directive specifies the precision of the system clock (in
-seconds). It is used by *chronyd* to estimate the minimum noise in NTP
-measurements and randomise low-order bits of timestamps in NTP responses. By
-default, the precision is measured on start-up as the minimum time to read the
-clock.
+seconds). This value is used by *chronyd* as the minimum expected error and
+amount of noise in NTP and refclock measurements, and to randomise low-order
+bits of timestamps in NTP responses to make them less predictable. The minimum
+value is 1 nanosecond and the maximum value is 1 second.
 +
-The measured value works well in most cases. It generally overestimates the
-precision and it can be sensitive to the CPU speed, however, which can
-change over time to save power. In some cases with a high-precision clocksource
-(e.g. the Time Stamp Counter of the CPU) and hardware timestamping, setting the
-precision on the server to a smaller value can improve stability of clients'
-NTP measurements. The server's precision is reported on clients by the
+By default, *chronyd* tries to determine the precision on start-up as the
+resolution of the clock. On Linux, it tries to measure the resolution by
+observing the minimum change in differences between consecutive readings of the
+clock. On other systems it relies on the *clock_getres(2)* system function.
++
+If the measurement fails, or the value provided by the system is too large, the
+minimum measured time needed to read the clock will be used instead. This value
+is typically larger than the resolution, and it is sensitive to the CPU speed,
+however, which can change over time to save power.
++
+The server's precision is reported on clients by the
 <<chronyc.adoc#ntpdata,*ntpdata*>> command.
 +
-An example setting the precision to 8 nanoseconds is:
+An example setting the precision to 1 nanosecond (e.g. when the system clock is
+using a Time Stamp Counter (TSC) updated at a rate of at least 1 GHz) is:
 +
 ----
-clockprecision 8e-9
+clockprecision 1e-9
 ----
 
 [[corrtimeratio]]*corrtimeratio* _ratio_::
@@ -1425,8 +1449,8 @@ for a high quality clock using a temperature compensated crystal oscillator.
 This directive specifies the maximum assumed drift (frequency error) of the
 system clock. It limits the frequency adjustment that *chronyd* is allowed to
 use to correct the measured drift. It is an additional limit to the maximum
-adjustment that can be set by the system driver (100000 ppm on Linux, 500 ppm
-on FreeBSD, NetBSD, and macOS 10.13+, 32500 ppm on illumos).
+adjustment that can be set by the system driver (100000 ppm on Linux and
+OpenBSD, 500 ppm on FreeBSD, NetBSD, and macOS 10.13+, 32500 ppm on illumos).
 +
 By default, the maximum assumed drift is 500000 ppm, i.e. the adjustment is
 limited by the system driver rather than this directive.
@@ -1463,10 +1487,10 @@ is effective only on systems where *chronyd* is able to control the rate (i.e.
 all supported systems with the exception of macOS 12 or earlier).
 +
 For each system there is a maximum frequency offset of the clock that can be set
-by the driver. On Linux it is 100000 ppm, on FreeBSD, NetBSD and macOS 10.13+ it
-is 5000 ppm, and on illumos it is 32500 ppm. Also, due to a kernel limitation,
-setting *maxslewrate* on FreeBSD, NetBSD, macOS 10.13+ to a value between 500
-ppm and 5000 ppm will effectively set it to 500 ppm.
+by the driver. On Linux and OpenBSD it is 100000 ppm, on FreeBSD, NetBSD and
+macOS 10.13+ it is 5000 ppm, on illumos it is 32500 ppm. Also, due to a kernel
+limitation, setting *maxslewrate* on FreeBSD, NetBSD, macOS 10.13+ to a value
+between 500 ppm and 5000 ppm will effectively set it to 500 ppm.
 +
 By default, the maximum slew rate is set to 83333.333 ppm (one twelfth).
 
@@ -2198,8 +2222,8 @@ hosts allowed by the *cmdallow* directive. The following commands can be
 specified (the naming follows *chronyc*):
 +
 *activity*+*+, *authdata*, *clients*, *manual*+*+, *ntpdata*, *rtcdata*+*+,
-*selectdata*, *serverstats*+*+, *smoothing*+*+, *sourcename*+*+, *sources*+*+,
-*sourcestats*, *tracking*+*+.
+*selectdata*, *serverstats+, *smoothing*+*+, *sourcename*+*+, *sources*+*+,
+*sourcestats*+**, *tracking*+*+.
 +
 The commands marked with +*+ are enabled by default. The protocol of these
 commands is considered stable and can be expected to work between different
@@ -2444,6 +2468,9 @@ Not considered selectable for synchronisation:
 * _N_ - has the *noselect* option.
 * _s_ - is not synchronised.
 * _M_ - does not have enough measurements.
+* _r_ - has a stratum outside of the allowed range (configured by the
+        <<minstratum,*minstratum*>> and <<maxstratum,*maxstratum*>>
+        directives).
 * _d_ - has a root distance larger than the maximum distance (configured by the
         <<maxdistance,*maxdistance*>> directive).
 * _~_ - has a jitter larger than the maximum jitter (configured by the
@@ -2859,6 +2886,38 @@ same interface (which would compete with timestamping of the server's own
 requests), increasing the timeout to 0.01 or possibly even longer might help.
 Note that the maximum timeout is limited by the NTP polling interval.
 
+[[maxtxbuffers]]*maxtxbuffers* _messages_::
+When *chronyd* gets a kernel or hardware transmit timestamp after sending an
+NTP message to a server, peer, or client (using interleaved mode), it needs the
+address and content of the message to be able to correctly assign the
+timestamp to the server, peer, or client. The timestamps are processed
+asynchronously. The kernel provides with each timestamp the data-link frame
+that was timestamped, but *chronyd* can extract the necessary data only from
+plain IPv4 and IPv6 packets in Ethernet frames, possibly including VLAN tags.
+If the NTP packets are transmitted by a non-Ethernet device, or they are
+encapsulated in another layer (e.g. a WireGuard tunnel), *chronyd* is not
+able to extract the data and use the kernel or hardware transmit timestamps,
+having to fall back to less accurate daemon timestamps.
++
+On Linux 6.13 and newer, *chronyd* supports an alternative method of processing
+kernel and hardware transmit timestamps, which works with any device that can
+provide kernel and/or hardware transmit timestamps. *chronyd* can save its
+transmitted messages with their addresses and ports in a ring buffer, each
+assigned an ID that the kernel will provide back with the timestamp. This
+transmit ID enables *chronyd* to assign the timestamp to the correct server,
+peer, or client.
++
+The directive specifies the maximum number of messages that *chronyd* is
+allowed to save in the ring buffer. The minimum value is 0 and the maximum
+value is 1048576. It needs about 1.5 KB of allocated memory per message.
+*chronyd* will log a warning if the number of messages is insufficient for the
+actual rate of transmit timestamping. The default value is 0 (disabled).
++
+Example:
+----
+maxtxbuffers 128
+----
+
 [[keyfile]]*keyfile* _file_::
 This directive is used to specify the location of the file containing symmetric
 keys, which are shared between NTP servers and clients, or peers, in order to
@@ -2929,7 +2988,7 @@ file when the <<chronyc.adoc#rekey,*rekey*>> command is issued by *chronyc*).
 [[lock_all]]*lock_all*::
 The *lock_all* directive will lock the *chronyd* process into RAM so that it
 will never be paged out. This can result in lower and more consistent latency.
-The directive is supported on Linux, FreeBSD, NetBSD, and illumos.
+The directive is supported on Linux, FreeBSD, NetBSD, OpenBSD, and illumos.
 
 [[pidfile]]*pidfile* _file_::
 Unless *chronyd* is started with the *-Q* option, it writes its process ID
@@ -2946,29 +3005,30 @@ Setting this directive to _/_ disables writing and checking of the PID file.
 
 [[ptpport]]*ptpport* _port_::
 The *ptpport* directive enables *chronyd* to send and receive NTP messages
-contained in PTP event messages (NTP-over-PTP) to enable hardware timestamping
+contained in PTP event messages (NTP over PTP) to enable hardware timestamping
 on NICs that cannot timestamp NTP packets, but can timestamp unicast PTP
 packets, and also use corrections provided by PTP one-step end-to-end
 transparent clocks in network switches and routers. The port recognized by the
 NICs and PTP transparent clocks is 319 (PTP event port). The default value is 0
 (disabled).
 +
-The NTP-over-PTP support is experimental. The protocol and configuration can
-change in future. It should be used only in local networks.
+Support for NTP over PTP was added in *chronyd* version 4.9.
+Versions 4.2-4.8 supported an experimental version of the transport, which is
+not compatible with the final specification.
 +
 The PTP port will be open even if *chronyd* is not configured to operate as a
 server or client. The directive does not change the default protocol of
-specified NTP sources. Each NTP source that should use NTP-over-PTP needs to
+specified NTP sources. Each NTP source that should use NTP over PTP needs to
 be specified with the *port* option set to the PTP port. To actually enable
 hardware timestamping on NICs that can timestamp PTP packets only, the
 *rxfilter* option of the *hwtimestamp* directive needs to be set to _ptp_. The
-extension field _F324_ needs to be enabled to use the corrections provided by
+extension field _10A_ needs to be enabled to use the corrections provided by
 the PTP transparent clocks.
 +
 An example of client configuration is:
 +
 ----
-server ntp1.example.net minpoll 0 maxpoll 0 xleave port 319 extfield F324
+server ntp1.example.net minpoll 0 maxpoll 0 xleave port 319 extfield 10A
 hwtimestamp * rxfilter ptp
 ptpport 319
 ----
@@ -2979,11 +3039,11 @@ accepted NTP-over-PTP messages. Messages from other domains are ignored.
 The default is 123, the minimum is 0, and the maximum is 255.
 
 [[sched_priority]]*sched_priority* _priority_::
-On Linux, FreeBSD, NetBSD, and illumos, the *sched_priority* directive will
-select the SCHED_FIFO real-time scheduler at the specified priority (which must
-be between 0 and 100). On macOS, this option must have either a value of 0 (the
-default) to disable the thread time constraint policy or 1 for the policy to be
-enabled.
+On Linux, FreeBSD, NetBSD, OpenBSD, and illumos, the *sched_priority* directive
+will select the SCHED_FIFO real-time scheduler at the specified priority (which
+must be between 0 and 100). On macOS, this option must have either a value of 0
+(the default) to disable the thread time constraint policy or 1 for the policy
+to be enabled.
 +
 On systems other than macOS, this directive uses the *pthread_setschedparam()*
 system call to instruct the kernel to use the SCHED_FIFO first-in, first-out
@@ -3005,9 +3065,9 @@ The *user* directive sets the name of the system user to which *chronyd* will
 switch after start in order to drop root privileges.
 +
 On Linux, *chronyd* needs to be compiled with support for the *libcap* library.
-On macOS, FreeBSD, NetBSD and illumos *chronyd* forks into two processes.
-The child process retains root privileges, but can only perform a very limited
-range of privileged system calls on behalf of the parent.
+On macOS, FreeBSD, NetBSD, OpenBSD, and illumos *chronyd* forks into two
+processes. The child process retains root privileges, but can only perform a
+very limited range of privileged system calls on behalf of the parent.
 +
 The compiled-in default value is _@DEFAULT_USER@_.
 
