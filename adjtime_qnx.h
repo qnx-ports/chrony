@@ -2,6 +2,17 @@
 #define ADJTIME_QNX_H
 
 /*
+ * Derived from:
+ * https://web.mit.edu/freebsd/head/contrib/ntp/libntp/adjtime.c
+ *
+ * Copyright and licensing information:
+ * https://web.mit.edu/freebsd/head/contrib/ntp/COPYRIGHT
+ *
+ * This file contains an implementation of adjtime() for QNX
+ * derived from code in the Network Time Protocol Version 4
+ * Distribution.
+ */
+/*
  * Emulate adjtime() using QNX ClockAdjust().
  * Chris Burghart <burghart@atd.ucar.edu>, 11/2001
  * Miroslaw Pabich <miroslaw_pabich@o2.pl>, 09/2005
