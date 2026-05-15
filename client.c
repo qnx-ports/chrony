@@ -287,7 +287,7 @@ open_unix_socket(char *server_path)
     goto error1;
   }
 
-  dir_fd1 = open(sock_dir1, O_RDONLY | O_NOFOLLOW);
+  dir_fd1 = open(sock_dir1, O_RDONLY | O_NOFOLLOW | O_DIRECTORY); // qnx-ism required for fstat
   if (dir_fd1 < 0 || fstat(dir_fd1, &st) < 0) {
     LOG(LOGS_ERR, "Could not open/stat %s : %s", sock_dir1, strerror(errno));
     goto error2;
@@ -311,7 +311,7 @@ open_unix_socket(char *server_path)
 
   if (chmod(sock_path, 0666) < 0 ||
       chmod(sock_dir2, 0711) < 0 ||
-      fchmod(dir_fd1, 0711) < 0) {
+      chmod(sock_dir1, 0711) < 0) {
     LOG(LOGS_ERR, "Could not change socket or directory permissions : %s", strerror(errno));
     SCK_RemoveSocket(s);
     SCK_CloseSocket(s);

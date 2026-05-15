@@ -47,6 +47,9 @@
 #include "sys_posix.h"
 #elif defined(MACOSX)
 #include "sys_macosx.h"
+#elif defined(QNX)
+#include "sys_qnx.h"
+#include "sys_posix.h"
 #endif
 
 /* ================================================== */
@@ -73,6 +76,8 @@ SYS_Initialise(int clock_control)
   SYS_OpenBSD_Initialise();
 #elif defined(MACOSX)
   SYS_MacOSX_Initialise();
+#elif defined(QNX)
+  SYS_QNX_Initialise();
 #else
 #error Unknown system
 #endif
@@ -97,6 +102,8 @@ SYS_Finalise(void)
   SYS_OpenBSD_Finalise();
 #elif defined(MACOSX)
   SYS_MacOSX_Finalise();
+#elif defined(QNX)
+  SYS_QNX_Finalise();
 #else
 #error Unknown system
 #endif
@@ -116,6 +123,8 @@ void SYS_DropRoot(uid_t uid, gid_t gid, SYS_ProcessContext context)
   SYS_OpenBSD_DropRoot(uid, gid, context, !null_driver);
 #elif defined(MACOSX) && defined(FEAT_PRIVDROP)
   SYS_MacOSX_DropRoot(uid, gid, context);
+#elif defined(QNX) && defined(FEAT_PRIVDROP)
+  SYS_QNX_DropRoot(uid, gid, context);
 #else
   LOG_FATAL("dropping root privileges not supported");
 #endif

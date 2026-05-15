@@ -1737,6 +1737,12 @@ SCK_RemoveSocket(int sock_fd)
 
   saddr_len = sizeof (saddr);
 
+#ifdef QNX
+  // QNX getsockname doesn't null terminate sun_path
+  // 0 initializing will ensure that there is at least a null byte where the string ends
+  memset(&saddr, 0, sizeof(saddr)); 
+#endif
+
   if (getsockname(sock_fd, &saddr.sa, &saddr_len) < 0) {
     DEBUG_LOG("getsockname() failed : %s", strerror(errno));
     return 0;
